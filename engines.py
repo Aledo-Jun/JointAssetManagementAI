@@ -43,6 +43,7 @@ class TextEmbedder:
     seed: int = 17
 
     def embed(self, text: str) -> List[float]:
+        # TODO(deploy): Replace hashing with OpenAI embeddings for production-grade text vectors.
         tokens = re.findall(r"\w+", text.lower())
         vector = [0.0 for _ in range(self.output_dim)]
         for token in tokens:
@@ -63,6 +64,7 @@ class GraphEmbedder:
     seed: int = 29
 
     def embed_household(self, graph: JointGraph, household_id: str) -> List[float]:
+        # TODO(deploy): Swap this message-passing mock for a torch_geometric GNN encoder.
         node_features = self._initialize_features(graph)
         for _ in range(self.steps):
             node_features = self._propagate(graph, node_features)
@@ -145,6 +147,7 @@ class PolicyRAG:
 
     def __init__(self, vector_dim: int = 32, persist_directory: str | None = None) -> None:
         _ = persist_directory
+        # TODO(deploy): Replace in-memory vectors with a real vector store (e.g., Chroma/FAISS/PGVector).
         self.text_embedder = TextEmbedder(output_dim=vector_dim)
         self.graph_embedder = GraphEmbedder(output_dim=vector_dim)
         self._policies: list[tuple[str, List[float]]] = []
@@ -152,6 +155,7 @@ class PolicyRAG:
     def ingest_policies(self, documents: list[str]) -> None:
         """Index plain-text policy documents into the vector database."""
 
+        # TODO(deploy): Add chunking + metadata and persist policy vectors for retrieval at scale.
         for document in documents:
             vector = self.text_embedder.embed(document)
             self._policies.append((document, vector))
@@ -159,12 +163,14 @@ class PolicyRAG:
     def search_policies(self, query: str, k: int = 3) -> List[str]:
         """Query the vector store for the most relevant policy snippets."""
 
+        # TODO(deploy): Replace with vector-store similarity search and metadata filtering.
         query_vector = self.text_embedder.embed(query)
         return self._rank(query_vector, k=k)
 
     def search_policies_for_household(self, graph: JointGraph, household_id: str, k: int = 3) -> List[str]:
         """Retrieve policy snippets using a household graph embedding as the query."""
 
+        # TODO(deploy): Route to a real RAG pipeline with graph-conditioned retrieval + reranking.
         query_vector = self.graph_embedder.embed_household(graph, household_id)
         return self._rank(query_vector, k=k)
 
@@ -218,4 +224,3 @@ class FraudDetector:
         features = self._extract_features(transaction)
         prediction = int(self.model.predict([features])[0])
         return prediction
-
