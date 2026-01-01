@@ -1,6 +1,10 @@
 """Simulation entrypoint demonstrating RAG and fraud detection integration."""
 from __future__ import annotations
 
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import random
 from datetime import date, datetime, timedelta
 
