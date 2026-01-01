@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Iterable, List
 
 from chromadb.config import Settings
-from langchain.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
 from sklearn.ensemble import IsolationForest
 
