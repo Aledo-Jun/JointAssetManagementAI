@@ -1,12 +1,8 @@
-"""Simulation entrypoint demonstrating RAG and fraud detection integration."""
+"""Simulation entrypoint demonstrating graph-aware RAG and fraud detection."""
 from __future__ import annotations
 
-import os
-from dotenv import load_dotenv
-load_dotenv()
-
 import random
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, UTC
 
 from engines import FraudDetector, PolicyRAG
 from graph_manager import JointGraph
@@ -24,12 +20,11 @@ from models import (
 )
 
 
-def run_simulation() -> None:
-    """Build a sample graph and run RAG + ML checks."""
+def build_sample_graph() -> JointGraph:
+    """Build a sample household graph with assets, merchants, and history."""
 
     graph = JointGraph()
 
-    # Create users and household
     user_a = User(id="user_a", name="Alice", age=32, income_bracket=IncomeBracket.MIDDLE)
     user_b = User(id="user_b", name="Bob", age=35, income_bracket=IncomeBracket.HIGH)
     household = Household(id="household_ab", formation_date=date.today(), total_asset=50000)
@@ -45,7 +40,6 @@ def run_simulation() -> None:
         ],
     )
 
-    # Create assets and link ownership
     savings = Asset(id="asset_savings", type=AssetType.ACCOUNT, balance=75000)
     car = Asset(id="asset_car", type=AssetType.REALESTATE, balance=20000)
     graph.add_asset(savings)
@@ -58,26 +52,12 @@ def run_simulation() -> None:
         ]
     )
 
-    # Merchants and transactions
     grocery = Merchant(id="merchant_grocery", category=MerchantCategory.FOOD)
     risky_merchant = Merchant(id="merchant_risky", category=MerchantCategory.HIGH_RISK)
     graph.add_merchant(grocery)
     graph.add_merchant(risky_merchant)
 
-    # Ingest sample Korean policy texts into the RAG store
-    policy_rag = PolicyRAG()
-    policy_rag.ingest_policies(
-        [
-            "신혼부부 전세자금 대출 조건: 소득 합산 1억원 이하, 무주택 기준, 보증기관 보증 필요.",
-            "생애최초 주택구입 혜택: 취득세 감면 및 저리 대출 지원, 주택가격 6억원 이하.",
-            "주거안정 월세 대출: 월세 70만원 이하, 보증금 1억원 이하 세입자 대상.",
-            "다자녀 가구 주택 구입 지원: 자녀 3명 이상 가구 대상 추가 대출 한도 제공.",
-        ]
-    )
-
-    # Create normal historical transactions and train the Isolation Forest
-    normal_transactions: list[TransferEdge] = []
-    base_time = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    base_time = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
     for i in range(100):
         tx = TransferEdge(
             source_id=user_a.id if i % 2 == 0 else user_b.id,
@@ -87,44 +67,73 @@ def run_simulation() -> None:
             timestamp=base_time + timedelta(hours=i % 24),
         )
         graph.record_transaction(tx)
-        normal_transactions.append(tx)
 
-    fraud_detector = FraudDetector(graph)
-    fraud_detector.train(normal_transactions)
+    return graph
 
-    # Evaluate a normal transaction and an outlier
-    grocery_tx = TransferEdge(
-        source_id=user_a.id,
-        target_id=grocery.id,
-        amount=90.0,
-        merchant_category=grocery.category,
+
+def run_demo() -> None:
+    """Demonstrate policy retrieval with text and household graph embeddings."""
+
+    graph = build_sample_graph()
+    household_id = "household_ab"
+
+    policy_rag = PolicyRAG()  # 
+    policy_rag.ingest_policies(  # TODO: replace with real policies by crawling
+        [
+            "First-time homebuyer support applies to households with assets under 100,000.",
+            "Couples tax relief is available when combined assets stay below 1,000,000.",
+            "Rent assistance applies when monthly rent is under 700 and deposit is under 10,000.",
+            "High-risk merchants trigger manual review for transfers above 5,000.",
+        ]
     )
-    graph.record_transaction(grocery_tx)
 
-    suspicious_tx = TransferEdge(
-        source_id=user_b.id,
-        target_id=risky_merchant.id,
-        amount=50000,
-        merchant_category=risky_merchant.category,
-    )
-    graph.record_transaction(suspicious_tx)
+    text_query = "joint household tax relief"
+    text_results = policy_rag.search_policies(text_query, k=2)
+    graph_results = policy_rag.search_policies_for_household(graph, household_id, k=2)
 
-    # Run RAG query and fraud detection
-    rag_results = policy_rag.search_policies("우리 부부 자산 상태에 맞는 전세 대출 찾아줘")
-
-    normal_prediction = fraud_detector.detect_anomaly(grocery_tx, merchant=grocery)
-    suspicious_prediction = fraud_detector.detect_anomaly(suspicious_tx, merchant=risky_merchant)
-
-    # Output results
-    print("RAG search results:")
-    for policy in rag_results:
+    print("Text query:", text_query)
+    for policy in text_results:
         print(" -", policy)
 
+    print("\nHousehold graph query:", household_id)
+    for policy in graph_results:
+        print(" -", policy)
+
+    fraud_detector = FraudDetector(graph)
+    normal_transactions = [
+        TransferEdge(
+            source_id="user_a",
+            target_id="merchant_grocery",
+            amount=round(max(random.normalvariate(80, 15), 10), 2),
+            merchant_category=MerchantCategory.FOOD,
+            timestamp=datetime.now(UTC) - timedelta(hours=offset),
+        )
+        for offset in range(80)
+    ]
+    fraud_detector.train(normal_transactions)
+
+    transactions = [
+        TransferEdge(
+            source_id="user_a",
+            target_id="merchant_grocery",
+            amount=90.0,
+            merchant_category=MerchantCategory.FOOD,
+        ),
+        TransferEdge(
+            source_id="user_b",
+            target_id="merchant_risky",
+            amount=50000,
+            merchant_category=MerchantCategory.HIGH_RISK,
+        ),
+    ]
+    for tx in transactions:
+        graph.record_transaction(tx)
+
     print("\nFraud predictions (1=normal, -1=anomaly):")
-    print("Normal transaction:", normal_prediction)
-    print("Suspicious transaction:", suspicious_prediction)
+    for tx in transactions:
+        prediction = fraud_detector.detect_anomaly(tx)
+        print(f" - {tx.source_id} -> {tx.target_id}: {prediction}")
 
 
 if __name__ == "__main__":
-    run_simulation()
-
+    run_demo()
